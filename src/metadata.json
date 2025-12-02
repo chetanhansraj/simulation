@@ -1,0 +1,5 @@
+{
+  "name": "OODA Loop: Autonomous Agent Simulation",
+  "description": "A simulation of autonomous AI agents (Alex, Bella, Charlie) living in a virtual world. Each agent uses Gemini 2.5 Flash to Observe, Orient, Decide, and Act based on their unique simulated personalities and vitals.",
+  "requestFramePermissions": []
+}
