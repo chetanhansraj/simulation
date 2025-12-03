@@ -12,8 +12,10 @@ export enum ActionType {
   CONSUME = 'CONSUME',
   USE = 'USE',
   SLEEP = 'SLEEP',
+  REST = 'REST',
   SOCIALIZE = 'SOCIALIZE',
-  IDLE = 'IDLE'
+  IDLE = 'IDLE',
+  APPLY = 'APPLY'
 }
 
 export type ItemType = 'food' | 'gadget' | 'service';
@@ -77,6 +79,7 @@ export interface Agent {
     type: string;
     traits: string[];
     goals: string;
+    ambition: number; // 0-100: affects work frequency and brand preferences
   };
   vitals: Vitals;
   location: LocationType;
@@ -84,12 +87,18 @@ export interface Agent {
   memory: AgentMemory;
   lastDecision: AgentDecision | null;
   history: string[]; // Short history of recent log messages
-  
+
   // Phase 3E: Multi-LLM & Scaling
   modelProvider: 'groq';
   modelName: string;
   spawnTime: number; // Hour of day (0-23) to start existing
   thinkFrequency: number; // How often to query LLM (in hours)
+
+  // Employment
+  employer: string | null; // Company ID
+  wage: number; // Hourly wage
+  sleepCounter: number; // Tracks hours sleeping (for 6-hour sleep cycles)
+  restCounter: number; // Tracks hours resting
 }
 
 export interface MarketProduct {
@@ -105,6 +114,7 @@ export interface MarketProduct {
     energy?: number; // Increases energy
     boredom?: number; // Reduces boredom
   };
+  ratings: number[]; // Array of ratings 0-100 from agents
 }
 
 export interface Company {
@@ -115,18 +125,24 @@ export interface Company {
   funds: number;
   reputation: number; // 0-100 (Phase 3C)
   strategy: string; // CEO personality/strategy
-  modelProvider?: string;  // ✅ ADD THIS
+  modelProvider?: string;
   modelName?: string;
+
+  // Employment System
+  employees: string[]; // Agent IDs
+  openPositions: number; // Number of open job slots
+  wage: number; // Hourly wage for workers
 }
 
 export interface CeoDecision {
   thought_process: string;
-  action: 'LAUNCH_PRODUCT' | 'WITHDRAW_PRODUCT' | 'WAIT' | 'UNDERCUT' | 'IMPROVE';
+  action: 'LAUNCH_PRODUCT' | 'WITHDRAW_PRODUCT' | 'WAIT' | 'UNDERCUT' | 'IMPROVE' | 'HIRE' | 'REJECT';
   productName?: string;
   productPrice?: number;
   productQuality?: number; // 1-100
   productType?: 'FOOD' | 'DRINK' | 'GADGET';
   targetProductId?: string; // For withdrawal, undercut, or improvement
+  applicantId?: string; // For hiring decisions
 }
 
 export interface SimulationLog {

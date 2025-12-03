@@ -57,12 +57,25 @@ export const getAgentDecision = async (
     const company = companies.find(c => c.id === p.companyId);
     const companyName = company ? company.name : 'Unknown';
     const opinionScore = agent.memory.brandOpinions[p.companyId] || 0;
-    
+
     let opinionText = "";
     if (opinionScore > 5) opinionText = " [I LOVE THIS BRAND]";
     else if (opinionScore < -5) opinionText = " [I HATE THIS BRAND]";
-    
-    return `- ${p.name} (${companyName}) $${p.price} [Qual: ${p.quality}]${opinionText}`;
+
+    // Calculate average rating
+    const avgRating = p.ratings.length > 0
+      ? Math.round(p.ratings.reduce((a, b) => a + b, 0) / p.ratings.length)
+      : null;
+    const ratingText = avgRating !== null ? ` | Avg Rating: ${avgRating}/100 (${p.ratings.length} reviews)` : '';
+
+    // Show effects
+    const effects = [];
+    if (p.effect.hunger) effects.push(`Hunger ${p.effect.hunger}`);
+    if (p.effect.energy) effects.push(`Energy +${p.effect.energy}`);
+    if (p.effect.boredom) effects.push(`Boredom ${p.effect.boredom}`);
+    const effectText = effects.length > 0 ? ` | Effects: ${effects.join(', ')}` : '';
+
+    return `- ${p.name} (${companyName}) | $${p.price} | Quality: ${p.quality}${effectText}${ratingText}${opinionText}`;
   }).join("\n");
 
   const lastAction = agent.memory.actionHistory[agent.memory.actionHistory.length - 1];
@@ -75,42 +88,52 @@ export const getAgentDecision = async (
     ? agent.inventory.map(i => `${i.name} (${i.type})`).join(", ") 
     : "Empty";
 
+  const employmentInfo = agent.employer
+    ? `Employed at ${companies.find(c => c.id === agent.employer)?.name || 'Unknown'} (Wage: $${agent.wage}/hour)`
+    : 'Unemployed';
+
   const prompt = `
     You are a simulation agent named ${agent.name}.
-    
+
     IDENTITY:
     Traits: ${agent.personality.traits.join(", ")}
     Goal: ${agent.personality.goals}
-    
+    Ambition: ${agent.personality.ambition}/100 (affects work drive and spending)
+
     STATE (Time: ${worldTime}:00):
     - Location: ${agent.location}
     - Vitals: Hunger ${agent.vitals.hunger}/100, Energy ${agent.vitals.energy}/100, Boredom ${agent.vitals.boredom}/100
     - Wallet: $${agent.vitals.money}
+    - Employment: ${employmentInfo}
     - Inventory: ${inventoryList}
-    
+
     MEMORY STREAM:
     - Recent Events: ${recentEventsLog || "Just woke up."}
     - Immediate Feedback: ${feedback}
-    
-    MARKET (at Store):
-    ${marketList}
-    
-    CRITICAL LOCATION & ITEM RULES:
-    1. To WORK -> You MUST be at 'Office'. If not, MOVE to 'Office'.
-    2. To BUY -> You MUST be at 'Supermarket'. If not, MOVE to 'Supermarket'.
-    3. To SOCIALIZE -> You MUST be at 'Park'. If not, MOVE to 'Park'.
-    4. To SLEEP -> Go 'Home' first.
-    5. To CONSUME (Food/Drink/Service) -> You MUST have the item in Inventory. Consuming removes the item.
-    6. To USE (Gadget) -> You MUST have the item in Inventory. Using keeps the item (reusable).
+
+    AVAILABLE PRODUCTS (at Supermarket):
+    ${marketList || "No products available"}
+
+    CRITICAL RULES:
+    1. WORK -> Must be at 'Office'. ${agent.employer ? 'You work for ' + companies.find(c => c.id === agent.employer)?.name : 'You can work freelance for $50/hour'}.
+    2. BUY <product name> -> Must be at 'Supermarket'. Use EXACT product names from the list above.
+    3. CONSUME <item> -> Can be done ANYWHERE if item is in inventory. Removes the item.
+    4. USE <gadget> -> Can be done ANYWHERE if gadget is in inventory. Reusable.
+    5. SLEEP -> Must be at 'Home'. Takes 6 hours, fully restores energy.
+    6. REST -> Can be done ANYWHERE. Takes 1 hour, restores +25 energy. Quick recharge.
+    7. SOCIALIZE -> Must be at 'Park' or 'Supermarket'. Reduces boredom significantly.
+    8. MOVE <location> -> Valid locations: Home, Office, Supermarket, Park
 
     DECISION PROCESS:
-    1. Look at your LAST ACTION result. Did it fail? If so, fix the problem.
-    2. Check Vitals. Prioritize critical needs (Hunger > 80, Energy < 20).
-    3. Check Brand Opinions. If you hate a brand, don't buy from them unless desperate.
-    4. Check Location. Can you do what you want here? If not, MOVE.
-    
+    1. Check last action feedback. If it failed, fix the issue.
+    2. Prioritize critical vitals: Hunger > 70, Energy < 25, Boredom > 80.
+    3. Use REST for quick energy boost when away from home. Use SLEEP at home for full restore.
+    4. You can eat/consume items ANYWHERE now (no need to go home).
+    5. Consider ambition: High ambition = work more, low ambition = prioritize fun.
+    6. Check product ratings before buying. Avoid low-rated items.
+
     Task: Return JSON for your next move.
-    Format: {"thought_process": "string", "action": "MOVE|WORK|BUY|CONSUME|USE|SLEEP|SOCIALIZE|IDLE", "target": "string", "param": "string"}
+    Format: {"thought_process": "string", "action": "MOVE|WORK|BUY|CONSUME|USE|SLEEP|REST|SOCIALIZE|IDLE", "target": "string"}
   `;
 
   try {
@@ -144,7 +167,16 @@ export const getCeoDecision = async (
     const owner = allCompanies.find(c => c.id === p.companyId);
     const ownerName = owner ? owner.name : "Unknown";
     const isMine = p.companyId === company.id;
-    return `ID: ${p.id} | Name: ${p.name} | Price: $${p.price} | Quality: ${p.quality} | Brand: ${ownerName} (Rep: ${owner?.reputation || 50}) ${isMine ? "[MINE]" : ""}`;
+
+    // Calculate average rating
+    const avgRating = p.ratings.length > 0
+      ? Math.round(p.ratings.reduce((a, b) => a + b, 0) / p.ratings.length)
+      : null;
+    const ratingText = avgRating !== null
+      ? ` | Avg Rating: ${avgRating}/100 (${p.ratings.length} reviews)`
+      : ' | No ratings yet';
+
+    return `ID: ${p.id} | ${p.name} | $${p.price} | Quality: ${p.quality}${ratingText} | ${ownerName} (Rep: ${owner?.reputation || 50}) ${isMine ? "[MINE]" : ""}`;
   }).join("\n");
   
   const prompt = `
@@ -163,9 +195,14 @@ export const getCeoDecision = async (
     1. LAUNCH_PRODUCT: Create something entirely new.
     2. UNDERCUT: Target a competitor's successful product (targetProductId). Launch a cheaper version to steal their customers.
     3. IMPROVE: Target YOUR OWN existing product (targetProductId). Launch a "Pro" version with higher quality and price.
-    4. WITHDRAW_PRODUCT: Remove a failing product (targetProductId) to save costs.
+    4. WITHDRAW_PRODUCT: Remove a failing product (targetProductId) with low ratings (< 40/100) to protect brand reputation.
     5. WAIT: Save money.
-    
+
+    STRATEGIC TIPS:
+    - Pay attention to average ratings. Products with < 40/100 rating hurt your reputation.
+    - High-rated competitor products (> 70/100) are good targets to UNDERCUT.
+    - If your product has high ratings, consider launching an IMPROVE version.
+
     TASK:
     Analyze the market. Aggressively compete if you have funds (> $2000). Protect your reputation.
     

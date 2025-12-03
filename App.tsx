@@ -92,7 +92,8 @@ export default function App() {
                   hunger: decision.productType === 'FOOD' ? -20 - (quality/5) : 0,
                   energy: decision.productType === 'DRINK' ? 15 + (quality/10) : 0,
                   boredom: decision.productType === 'GADGET' ? -30 - (quality/2) : 0
-                }
+                },
+                ratings: []
             };
         } 
         else if ((decision.action === 'UNDERCUT' || decision.action === 'IMPROVE') && decision.targetProductId) {
@@ -114,7 +115,8 @@ export default function App() {
                     price: Math.floor(price),
                     quality: Math.min(100, Math.max(1, quality)),
                     cost: cost,
-                    effect: { ...targetProd.effect } 
+                    effect: { ...targetProd.effect },
+                    ratings: []
                 };
                 
                 if (isImprove) {
@@ -166,13 +168,32 @@ export default function App() {
 
     // 2. Physics Engine (Apply to ALL agents, even sleeping ones)
     let currentAgents = agents.map(agent => {
-      let newHunger = agent.vitals.hunger + 5;
-      let newEnergy = agent.vitals.energy - 3;
-      let newBoredom = agent.vitals.boredom + 5;
+      let newHunger = agent.vitals.hunger + 1.5; // Reduced from 5
+      let newEnergy = agent.vitals.energy - 2;   // Reduced from 3
+      let newBoredom = agent.vitals.boredom + 10; // Increased from 5
 
+      // SLEEP MECHANICS: 6-hour sleep cycle
       if (agent.lastDecision?.action === ActionType.SLEEP) {
-        newEnergy += 25;
-        newHunger += 2; 
+        if (agent.sleepCounter >= 6) {
+          // Finished sleeping
+          newEnergy = 100; // Full restore
+        } else {
+          // Still sleeping
+          newEnergy = agent.vitals.energy + 16.67; // 100 energy over 6 hours
+        }
+        newHunger += 1; // Less hunger increase while sleeping
+      }
+
+      // REST MECHANICS: 1-hour rest
+      if (agent.lastDecision?.action === ActionType.REST) {
+        newEnergy = agent.vitals.energy + 25; // Quick restore
+      }
+
+      // HOME PASSIVE RESTORE: +8 energy per hour at home
+      if (agent.location === LocationType.HOME &&
+          agent.lastDecision?.action !== ActionType.SLEEP &&
+          agent.lastDecision?.action !== ActionType.REST) {
+        newEnergy += 8;
       }
 
       return {
@@ -206,10 +227,22 @@ export default function App() {
           addLog(agent.name, "Has entered the simulation.", "system");
       }
 
-      // -- SLEEP LOGIC --
-      if (agent.lastDecision?.action === ActionType.SLEEP && agent.vitals.energy < 90) {
-          addLog(agent.name, "Zzz...", 'action');
-          continue; 
+      // -- SLEEP LOGIC (6-hour cycle) --
+      if (agent.lastDecision?.action === ActionType.SLEEP) {
+          if (agent.sleepCounter < 6 && agent.vitals.energy < 95) {
+              addLog(agent.name, `Zzz... (${agent.sleepCounter}/6 hours)`, 'action');
+              updatedAgents[index] = {
+                  ...agent,
+                  sleepCounter: agent.sleepCounter + 1
+              };
+              continue;
+          } else {
+              // Finished sleeping or energy full
+              updatedAgents[index] = {
+                  ...agent,
+                  sleepCounter: 0
+              };
+          }
       }
 
       // -- THINKING FREQUENCY OPTIMIZER --
@@ -329,9 +362,10 @@ export default function App() {
                
                newInventory.splice(consumeIndex, 1);
                
-               const randomVar = Math.floor(Math.random() * 20) - 10; 
+               const randomVar = Math.floor(Math.random() * 20) - 10;
                const satisfaction = Math.max(1, Math.min(10, Math.round((item.quality + randomVar) / 10)));
-               
+               const rating = satisfaction * 10; // Convert to 0-100 scale
+
                let opinionChange = 0;
                let opinionMsg = "";
                if (satisfaction >= 8) {
@@ -341,11 +375,17 @@ export default function App() {
                    opinionChange = -5;
                    opinionMsg = "Hated it.";
                }
-               
+
+               // ADD RATING TO PRODUCT
+               const productInMarket = updatedMarket.find(p => p.name === item.name && p.companyId === item.companyId);
+               if (productInMarket) {
+                   productInMarket.ratings.push(rating);
+               }
+
                if (item.companyId) {
                    const currentOp = newMemory.brandOpinions[item.companyId] || 0;
                    newMemory.brandOpinions[item.companyId] = Math.max(-100, Math.min(100, currentOp + opinionChange));
-                   
+
                    const compIdx = updatedCompanies.findIndex(c => c.id === item.companyId);
                    if (compIdx > -1) {
                        const repChange = satisfaction >= 8 ? 1 : (satisfaction <= 4 ? -2 : 0);
@@ -360,9 +400,9 @@ export default function App() {
                  time: worldTime
                };
                newMemory.purchaseHistory.push(record);
-               newMemory.recentEvents.push(`Consumed ${item.name}. Rating: ${satisfaction}/10. ${opinionMsg}`);
+               newMemory.recentEvents.push(`Consumed ${item.name}. Rating: ${satisfaction}/10 (${rating}/100). ${opinionMsg}`);
 
-               logMessage = `Consumed ${item.name}. ${opinionMsg} (Sat: ${satisfaction})`;
+               logMessage = `Consumed ${item.name}. ${opinionMsg} (Rating: ${rating}/100)`;
                actionSuccess = true;
              }
           } else {
@@ -374,7 +414,7 @@ export default function App() {
         
         case ActionType.USE:
           const useIndex = newInventory.findIndex(i => i.name.toLowerCase() === decision.target.toLowerCase());
-          
+
           if (useIndex > -1) {
              const item = newInventory[useIndex];
              if (item.type !== 'gadget') {
@@ -384,16 +424,25 @@ export default function App() {
              } else {
                 if (item.effect.boredom) newVitals.boredom += item.effect.boredom;
                 if (item.effect.energy) newVitals.energy += (item.effect.energy || 0);
-                
-                const satisfaction = Math.round(item.quality / 10);
-                
-                if (item.companyId && satisfaction > 7) {
-                   const currentOp = newMemory.brandOpinions[item.companyId] || 0;
-                   newMemory.brandOpinions[item.companyId] = Math.min(100, currentOp + 1);
+
+                const randomVar = Math.floor(Math.random() * 20) - 10;
+                const satisfaction = Math.max(1, Math.min(10, Math.round((item.quality + randomVar) / 10)));
+                const rating = satisfaction * 10; // 0-100 scale
+
+                // ADD RATING TO PRODUCT
+                const productInMarket = updatedMarket.find(p => p.name === item.name && p.companyId === item.companyId);
+                if (productInMarket) {
+                    productInMarket.ratings.push(rating);
                 }
 
-                newMemory.recentEvents.push(`Used ${item.name}. It was fun.`);
-                logMessage = `Used ${item.name}. Fun! (Boredom ${item.effect.boredom})`;
+                if (item.companyId) {
+                   const currentOp = newMemory.brandOpinions[item.companyId] || 0;
+                   const opinionChange = satisfaction >= 8 ? 2 : (satisfaction <= 4 ? -3 : 0);
+                   newMemory.brandOpinions[item.companyId] = Math.max(-100, Math.min(100, currentOp + opinionChange));
+                }
+
+                newMemory.recentEvents.push(`Used ${item.name}. Rating: ${rating}/100.`);
+                logMessage = `Used ${item.name}. Fun! (Rating: ${rating}/100)`;
                 actionSuccess = true;
              }
           } else {
@@ -406,8 +455,9 @@ export default function App() {
         case ActionType.SLEEP:
            if (agent.location === LocationType.HOME) {
              actionSuccess = true;
-             logMessage = `Is sleeping.`;
-             newMemory.recentEvents.push("Slept.");
+             logMessage = `Started sleeping (6 hours).`;
+             newMemory.recentEvents.push("Started sleeping.");
+             updatedAgents[index] = { ...agent, sleepCounter: 0 }; // Reset counter
            } else {
              actionSuccess = false;
              actionFailMessage = "Tried to SLEEP but wasn't at Home. Move to 'Home' first.";
@@ -415,16 +465,69 @@ export default function App() {
            }
            break;
 
+        case ActionType.REST:
+           actionSuccess = true;
+           logMessage = `Taking a rest (+25 energy).`;
+           newMemory.recentEvents.push("Took a rest break.");
+           break;
+
         case ActionType.SOCIALIZE:
-           if (agent.location === LocationType.PARK) {
-               newVitals.boredom -= 15;
+           // Can socialize at Park or Supermarket
+           if (agent.location === LocationType.PARK || agent.location === LocationType.STORE) {
+               newVitals.boredom -= 35;
+               newVitals.energy -= 5;
+
+               // GOSSIP MECHANICS: Share opinions with random agent at same location
+               const agentsAtSameLocation = updatedAgents.filter(a =>
+                   a.id !== agent.id &&
+                   a.location === agent.location &&
+                   (worldTime >= a.spawnTime || (worldTime < a.spawnTime && a.spawnTime > 24))
+               );
+
+               if (agentsAtSameLocation.length > 0) {
+                   const randomAgent = agentsAtSameLocation[Math.floor(Math.random() * agentsAtSameLocation.length)];
+                   const randomAgentIndex = updatedAgents.findIndex(a => a.id === randomAgent.id);
+
+                   // Pick a random brand opinion to share
+                   const brandIds = Object.keys(agent.memory.brandOpinions);
+                   if (brandIds.length > 0) {
+                       const randomBrandId = brandIds[Math.floor(Math.random() * brandIds.length)];
+                       const opinion = agent.memory.brandOpinions[randomBrandId];
+                       const company = updatedCompanies.find(c => c.id === randomBrandId);
+
+                       if (company) {
+                           // Transfer opinion influence
+                           const otherAgentOpinion = randomAgent.memory.brandOpinions[randomBrandId] || 0;
+                           const influence = Math.sign(opinion) * Math.floor(Math.abs(opinion) / 10);
+
+                           updatedAgents[randomAgentIndex] = {
+                               ...randomAgent,
+                               memory: {
+                                   ...randomAgent.memory,
+                                   brandOpinions: {
+                                       ...randomAgent.memory.brandOpinions,
+                                       [randomBrandId]: Math.max(-100, Math.min(100, otherAgentOpinion + influence))
+                                   }
+                               }
+                           };
+
+                           const gossipMsg = opinion > 0
+                               ? `"${company.name} is great!"`
+                               : `"${company.name} is terrible!"`;
+
+                           addLog(agent.name, `→ ${randomAgent.name}: ${gossipMsg}`, 'action');
+                           addLog(randomAgent.name, `${company.name} opinion ${influence > 0 ? '+' : ''}${influence}`, 'thought');
+                       }
+                   }
+               }
+
                actionSuccess = true;
-               logMessage = `Socialized at Park.`;
-               newMemory.recentEvents.push("Hung out at the Park.");
+               logMessage = `Socialized at ${agent.location}.`;
+               newMemory.recentEvents.push(`Hung out at the ${agent.location}.`);
            } else {
              actionSuccess = false;
-             actionFailMessage = "Tried to SOCIALIZE but wasn't at Park. Move to 'Park' first.";
-             logMessage = `Tried to socialize, but wasn't at the park.`;
+             actionFailMessage = "Tried to SOCIALIZE but wasn't at Park or Supermarket. Move there first.";
+             logMessage = `Tried to socialize, but no one around.`;
            }
            break;
 
